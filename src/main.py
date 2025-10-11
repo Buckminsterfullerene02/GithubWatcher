@@ -183,7 +183,7 @@ class GithubWatcher:
     async def initialize_events(self):
         try:
             log(f"  {self.name}: Making API request to {self.url}")
-            url = http.request('GET', url=self.url, headers=self.Headers)
+            url = http.request('GET', url=self.url, headers=self.Headers, timeout=30)
             log(f"  {self.name}: Events API response: {url.status}")
             
             if url.status == 200 and url.data:
@@ -203,7 +203,7 @@ class GithubWatcher:
     async def initialize_releases(self):
         try:
             log(f"  {self.name}: Making API request to {self.releases_url}")
-            url = http.request('GET', url=self.releases_url, headers=self.releases_headers)
+            url = http.request('GET', url=self.releases_url, headers=self.releases_headers, timeout=30)
             log(f"  {self.name}: Releases API response: {url.status}")
             
             if url.status == 200 and url.data:
@@ -227,16 +227,20 @@ class GithubWatcher:
             log(f"  {self.name}: Starting GitHub check - Tracking: {self.tracked_events}")
 
             # check rate limit
-            rate_url = http.request('GET', 'https://api.github.com/rate_limit', headers=self.Headers)
-            if rate_url.status == 200:
-                rate_data = json.loads(rate_url.data)
-                remaining = rate_data["resources"]["core"]["remaining"]
-                log(f"  {self.name}: Rate limit remaining: {remaining}")
-                if remaining <= 10:
-                    log(f'  {self.name}: Rate limited - skipping check')
-                    return
-            else:
-                log(f"  {self.name}: Rate limit check failed: {rate_url.status}", "ERROR")
+            try:
+                log(f"  {self.name}: Checking rate limit...")
+                rate_url = http.request('GET', 'https://api.github.com/rate_limit', headers=self.Headers, timeout=30)
+                if rate_url.status == 200:
+                    rate_data = json.loads(rate_url.data)
+                    remaining = rate_data["resources"]["core"]["remaining"]
+                    log(f"  {self.name}: Rate limit remaining: {remaining}")
+                    if remaining <= 10:
+                        log(f'  {self.name}: Rate limited - skipping check')
+                        return
+                else:
+                    log(f"  {self.name}: Rate limit check failed: {rate_url.status}", "ERROR")
+            except Exception as e:
+                log(f"  {self.name}: Rate limit check exception: {e}", "ERROR")
 
             # check releases if ReleaseEvent is tracked
             if "ReleaseEvent" in self.tracked_events:
@@ -261,7 +265,7 @@ class GithubWatcher:
         # more logging than code because this api is wacky af
         try:
             log(f"    {self.name}: Making releases API request...")
-            url = http.request('GET', url=self.releases_url, headers=self.releases_headers)
+            url = http.request('GET', url=self.releases_url, headers=self.releases_headers, timeout=30)
 
             if url.status == 200:
                 data = json.loads(url.data)
@@ -319,7 +323,7 @@ class GithubWatcher:
     async def check_events(self, channel, tracked_events):
         try:
             log(f"    {self.name}: Making events API request...")
-            url = http.request('GET', url=self.url, headers=self.Headers)
+            url = http.request('GET', url=self.url, headers=self.Headers, timeout=30)
             log(f"    {self.name}: Events response: {url.status}")
 
             if url.status == 200:
