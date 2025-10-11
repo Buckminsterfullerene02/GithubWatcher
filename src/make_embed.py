@@ -63,6 +63,48 @@ def MakeEmbed(json):
     
   return embed
 
+# I tried to make it like the github webhook release embed but it kinda sucks
+def MakeReleaseEmbed(release_data, repo_name):
+    embed = discord.Embed()
+    
+    author = release_data["author"]["login"]
+    author_url = release_data["author"]["html_url"]
+    author_avatar = release_data["author"]["avatar_url"]
+    
+    embed.set_author(name=f"{author}", url=author_url, icon_url=author_avatar)
+    embed.color = discord.Colour.from_str("#238636")
+    
+    embed.title = f"Release {release_data['tag_name']}"
+    embed.url = release_data["html_url"]
+    
+    repo_url = f"https://github.com/{repo_name}"
+    embed.description = f"**[{repo_name}]({repo_url})**\n"
+    
+    if release_data["name"] and release_data["name"] != release_data["tag_name"]:
+        embed.description += f"**{release_data['name']}**\n"
+    
+    if release_data.get("body"):
+        body = release_data["body"]
+        if len(body) > 500:
+            body = body[:500] + "..."
+        embed.description += f"\n{body}"
+    
+    if release_data.get("prerelease"):
+        embed.add_field(name="Type", value="Pre-release", inline=True)
+    elif release_data.get("draft"):
+        embed.add_field(name="Type", value="Draft", inline=True)
+    else:
+        embed.add_field(name="Type", value="Release", inline=True)
+    
+    if release_data.get("published_at"):
+        from datetime import datetime
+        pub_date = datetime.fromisoformat(release_data["published_at"].replace('Z', '+00:00'))
+        embed.timestamp = pub_date
+    
+    embed.set_footer(text="GitHub", icon_url="https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png")
+    
+    return embed
+
 def trimlink(api_link: str):
   link = api_link.replace("api.", "")
   link = link.replace("repos/", "")

@@ -1,0 +1,18 @@
+{
+    "repositories": [
+        {
+            "name": "whichtwix/GithubWatcher",
+            "url": "https://api.github.com/repos/whichtwix/GithubWatcher/events",
+            "etag": "",
+            "last_event_id": "",
+            "releases_etag": "",
+            "last_release_id": 0,
+            "tracked_events": [
+                "PushEvent",
+                "IssuesEvent",
+                "WatchEvent",
+                "ReleaseEvent"
+            ]
+        }
+    ]
+}

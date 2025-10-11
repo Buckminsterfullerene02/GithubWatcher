@@ -1,2 +1,6 @@
 .vs
 __pycache__
+venv
+*.env
+*.json
+!src/example_config.json
