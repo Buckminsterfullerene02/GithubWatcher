@@ -4,3 +4,7 @@ venv
 *.env
 *.json
 !src/example_config.json
+.dockerignore
+Dockerfile
+docker-compose.yml
+run.sh

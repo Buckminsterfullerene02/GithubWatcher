@@ -1,4 +1,6 @@
 import discord
+import re
+from markdownify import markdownify as md
 
 def MakeEmbed(json):
   embed = discord.Embed()
@@ -84,7 +86,7 @@ def MakeReleaseEmbed(release_data, repo_name):
         embed.description += f"**{release_data['name']}**\n"
     
     if release_data.get("body"):
-        body = release_data["body"]
+        body = sanitize_release_body(release_data["body"])
         if len(body) > 500:
             body = body[:500] + "..."
         embed.description += f"\n{body}"
@@ -110,3 +112,15 @@ def trimlink(api_link: str):
   link = link.replace("repos/", "")
   link = link.replace("commits", "commit")
   return link
+
+def sanitize_release_body(body):
+    if not body:
+        return ""
+    
+    # no images n links
+    body = md(body, strip=['img', 'a'])  
+    
+    # no excessive newlines
+    body = re.sub(r'\n{3,}', '\n\n', body)
+    
+    return body.strip()

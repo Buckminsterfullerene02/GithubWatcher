@@ -21,13 +21,13 @@ class Colors:
     WHITE = '\033[97m'
     GRAY = '\033[90m'
 
-load_dotenv('variables.env')
+load_dotenv('../variables.env')
 loop_time = int(os.getenv('loop_time', 300))
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix='$', intents=intents)
 http = urllib3.PoolManager()
 allrepos = []
-CONFIG_FILE = 'config.json'
+CONFIG_FILE = os.getenv('config_file')
 
 def log(message, level="INFO"):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
