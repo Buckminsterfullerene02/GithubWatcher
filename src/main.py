@@ -7,7 +7,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from uptime import keep_alive
 from discord.ext import commands, tasks
-from make_embed import MakeEmbed, MakeReleaseEmbed
+from make_embed import MakeEmbed, MakeReleaseEmbed, MakeTaggedReleaseEmbed
 
 class Colors:
     RESET = '\033[0m'
@@ -27,7 +27,7 @@ intents = discord.Intents.default()
 bot = commands.Bot(command_prefix='$', intents=intents)
 http = urllib3.PoolManager()
 allrepos = []
-CONFIG_FILE = os.getenv('config_file')
+CONFIG_FILE = os.getenv('config_file', 'config.json')
 
 def log(message, level="INFO"):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -86,7 +86,10 @@ async def on_ready():
             repo_config.get('tracked_events', []),
             repo_config.get('releases_url', ''),
             repo_config.get('releases_etag', ''),
-            repo_config.get('last_release_id', 0)
+            repo_config.get('last_release_id', 0),
+            repo_config.get('tag_name', ''),
+            repo_config.get('tracked_asset_ids', []),
+            repo_config.get('thread_id', None)
         )
         allrepos.append(watcher)
         log(f"Added watcher for {watcher.name} - Tracking: {watcher.tracked_events}")
@@ -108,6 +111,10 @@ async def save_repositories_to_config():
             config['repositories'][i]['last_event_id'] = repo.lastid
             config['repositories'][i]['releases_etag'] = repo.releases_headers.get("if-none-match", "")
             config['repositories'][i]['last_release_id'] = repo.last_release_id
+            if hasattr(repo, 'tag_name') and repo.tag_name:
+                config['repositories'][i]['tag_name'] = repo.tag_name
+            if hasattr(repo, 'tracked_asset_ids'):
+                config['repositories'][i]['tracked_asset_ids'] = repo.tracked_asset_ids
     
     save_config(config)
     log("Saved repository states to config", "SUCCESS")
@@ -130,7 +137,7 @@ async def looprepos():
         traceback.print_exc()
 
 class GithubWatcher:
-    def __init__(self, events_url: str, name: str = "", etag: str = "", last_event_id: int = 0, tracked_events: list = None, releases_url: str = "", releases_etag: str = "", last_release_id: int = 0):
+    def __init__(self, events_url: str, name: str = "", etag: str = "", last_event_id: int = 0, tracked_events: list = None, releases_url: str = "", releases_etag: str = "", last_release_id: int = 0, tag_name: str = "", tracked_asset_ids: list = None, thread_id: int = None):
         self.url = events_url
         self.releases_url = releases_url or events_url.replace('/events', '/releases')
         self.name = name or events_url[29:].replace('/events', '')
@@ -147,7 +154,14 @@ class GithubWatcher:
         self.lastid = last_event_id
         self.last_release_id = last_release_id
         self.tracked_events = tracked_events or []
+        self.tag_name = tag_name
+        self.tracked_asset_ids = tracked_asset_ids or []
+        self.thread_id = thread_id
         log(f"Created watcher for {self.name} - Events: {self.lastid}, Releases: {self.last_release_id}")
+        if self.tag_name:
+            log(f"  {self.name}: Tracking tag '{self.tag_name}' with {len(self.tracked_asset_ids)} assets")
+        if self.thread_id:
+            log(f"  {self.name}: Will post to thread {self.thread_id}")
     
     def validate_last_id_exists(self, last_id, data):
         if last_id == 0:
@@ -170,7 +184,7 @@ class GithubWatcher:
         else:
             log(f"  {self.name}: Using saved event state (lastid={self.lastid})")
         
-        # initialise releases if release event is traked
+        # initialise releases if release event is tracked
         if "ReleaseEvent" in self.tracked_events:
             if self.last_release_id == 0 or not self.releases_headers.get("if-none-match"):
                 log(f"  {self.name}: Initializing releases (last_release_id={self.last_release_id}, etag={bool(self.releases_headers.get('if-none-match'))})")
@@ -179,6 +193,14 @@ class GithubWatcher:
                 log(f"  {self.name}: Using saved release state (last_release_id={self.last_release_id})")
         else:
             log(f"  {self.name}: ReleaseEvent not tracked, skipping release initialization")
+            
+        # initialize tagged release if tracked
+        if "TaggedReleaseEvent" in self.tracked_events and self.tag_name:
+            if not self.tracked_asset_ids:
+                log(f"  {self.name}: Initializing tagged release assets for tag '{self.tag_name}'")
+                await self.initialize_tagged_release()
+            else:
+                log(f"  {self.name}: Using saved tagged release state ({len(self.tracked_asset_ids)} assets for tag '{self.tag_name}')")
 
     async def initialize_events(self):
         try:
@@ -189,7 +211,6 @@ class GithubWatcher:
             if url.status == 200 and url.data:
                 data = json.loads(url.data)
                 if data:
-                    old_etag = self.Headers.get("if-none-match", "none")
                     self.Headers["if-none-match"] = url.headers.get("ETag", "")
                     self.lastid = str(data[0]['id'])
                     log(f'  {self.name}: Events initialized - LastID={self.lastid}', "SUCCESS")
@@ -219,12 +240,37 @@ class GithubWatcher:
                 log(f"  {self.name}: Failed to initialize releases - Status: {url.status}", "ERROR")
         except Exception as e:
             log(f"  {self.name}: Error initializing releases: {e}", "ERROR")
+    
+    async def initialize_tagged_release(self):
+        try:
+            tag_url = f"https://api.github.com/repos/{self.name}/releases/tags/{self.tag_name}"
+            log(f"  {self.name}: Making API request to {tag_url}")
+            response = http.request('GET', url=tag_url, headers=self.Headers, timeout=30)
+            log(f"  {self.name}: Tagged release API response: {response.status}")
+            
+            if response.status == 200 and response.data:
+                data = json.loads(response.data)
+                if data.get('assets'):
+                    self.tracked_asset_ids = [asset['id'] for asset in data['assets']]
+                    log(f'  {self.name}: Tagged release initialized - Tracking {len(self.tracked_asset_ids)} assets for tag {self.tag_name}', "SUCCESS")
+                else:
+                    log(f"  {self.name}: No assets found for tag {self.tag_name}")
+                    self.tracked_asset_ids = []
+            else:
+                log(f"  {self.name}: Failed to initialize tagged release - Status: {response.status}", "ERROR")
+                
+        except Exception as e:
+            log(f"  {self.name}: Error initializing tagged release: {e}", "ERROR")
 
     async def check_github(self):
         try:
-            id = int(os.getenv('channel_id'))
-            channel = bot.get_channel(id)
-            log(f"  {self.name}: Starting GitHub check - Tracking: {self.tracked_events}")
+            if self.thread_id:
+                channel = bot.get_channel(self.thread_id)
+                log(f"  {self.name}: Starting GitHub check - Tracking: {self.tracked_events} (Thread: {self.thread_id})")
+            else:
+                id = int(os.getenv('channel_id'))
+                channel = bot.get_channel(id)
+                log(f"  {self.name}: Starting GitHub check - Tracking: {self.tracked_events} (Default channel)")
 
             # check rate limit
             try:
@@ -246,9 +292,14 @@ class GithubWatcher:
             if "ReleaseEvent" in self.tracked_events:
                 log(f"  {self.name}: Checking releases...")
                 await self.check_releases(channel)
+            
+            # check tagged releases if TaggedReleaseEvent is tracked
+            if "TaggedReleaseEvent" in self.tracked_events and self.tag_name:
+                log(f"  {self.name}: Checking tagged release for tag '{self.tag_name}'...")
+                await self.check_tagged_release(channel)
 
             # check other events
-            other_events = [event for event in self.tracked_events if event != "ReleaseEvent"]
+            other_events = [event for event in self.tracked_events if event not in ["ReleaseEvent", "TaggedReleaseEvent"]]
             if other_events:
                 log(f"  {self.name}: Checking other events: {other_events}")
                 await self.check_events(channel, other_events)
@@ -386,6 +437,61 @@ class GithubWatcher:
 
         except Exception as e:
             log(f"    {self.name}: Error checking events: {e}", "ERROR")
+
+    async def check_tagged_release(self, channel):
+        try:
+            tag_url = f"https://api.github.com/repos/{self.name}/releases/tags/{self.tag_name}"
+            log(f"    {self.name}: Making tagged release API request...")
+            response = http.request('GET', url=tag_url, headers=self.Headers, timeout=30)
+            
+            if response.status == 200 and response.data:
+                data = json.loads(response.data)
+                current_asset_ids = [asset['id'] for asset in data.get('assets', [])]
+                
+                log(f"    {self.name}: Current assets: {len(current_asset_ids)}, Tracked: {len(self.tracked_asset_ids)}")
+                
+                # check for new or changed assets
+                new_asset_ids = [aid for aid in current_asset_ids if aid not in self.tracked_asset_ids]
+                new_assets = []
+                
+                # fFind assets that changed (different Ids in same positions) or are completely new
+                for asset in data.get('assets', []):
+                    if asset['id'] in new_asset_ids:
+                        if len(self.tracked_asset_ids) == 0:
+                            # first time setup so dont send notifications
+                            log(f"    {self.name}: Initial asset tracking setup for {asset['name']}")
+                            continue
+                        else:
+                            # this is either a new asset or a changed asset
+                            new_assets.append(asset)
+                            log(f"    {self.name}: New/changed asset: {asset['name']} (ID: {asset['id']})")
+                
+                if new_assets:
+                    # send embed with all new/changed assets
+                    try:
+                        log(f"    {self.name}: Sending tagged release embed for {len(new_assets)} assets...")
+                        embed = MakeTaggedReleaseEmbed(data, new_assets, self.name, self.tag_name)
+                        if embed:
+                            await channel.send(embed=embed)
+                            log(f"    {self.name}: Successfully sent tagged release update")
+                        else:
+                            log(f"    {self.name}: Failed to create tagged release embed", "ERROR")
+                    except Exception as e:
+                        log(f"    {self.name}: Error sending tagged release embed: {e}", "ERROR")
+                
+                # update tracked asset IDs
+                if current_asset_ids != self.tracked_asset_ids:
+                    old_count = len(self.tracked_asset_ids)
+                    self.tracked_asset_ids = current_asset_ids
+                    log(f'    {self.name}: Updated asset tracking from {old_count} to {len(current_asset_ids)} assets', "SUCCESS")
+                    
+            elif response.status == 404:
+                log(f"    {self.name}: Tag {self.tag_name} not found (404)")
+            else:
+                log(f"    {self.name}: Tagged release API error: {response.status}", "ERROR")
+                
+        except Exception as e:
+            log(f"    {self.name}: Error checking tagged release: {e}", "ERROR")
     
 keep_alive()
 bot.run(os.getenv('discord_token'))
