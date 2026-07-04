@@ -122,7 +122,7 @@ async def setup_honeypot_channel():
 
     try:
         async for message in channel.history(limit=10):
-            if message.author == bot.user and message.embeds and message.embeds[0].title == "⚠️ Honeypot Channel":
+            if message.author == bot.user and message.embeds and message.embeds[0].title == "Honeypot Channel":
                 log("Honeypot warning embed already present, skipping")
                 return
 
