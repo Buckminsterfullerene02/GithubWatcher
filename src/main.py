@@ -7,7 +7,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from uptime import keep_alive
 from discord.ext import commands, tasks
-from make_embed import MakeEmbed, MakeReleaseEmbed, MakeTaggedReleaseEmbed
+from make_embed import MakeEmbed, MakeReleaseEmbed, MakeTaggedReleaseEmbed, MakeHoneypotWarningEmbed, MakeHoneypotBanEmbed
 
 class Colors:
     RESET = '\033[0m'
@@ -24,10 +24,14 @@ class Colors:
 load_dotenv('variables.env')
 loop_time = int(os.getenv('loop_time', 300))
 intents = discord.Intents.default()
+intents.message_content = True
 bot = commands.Bot(command_prefix='$', intents=intents)
 http = urllib3.PoolManager()
 allrepos = []
 CONFIG_FILE = os.getenv('config_file', 'config.json')
+HONEYPOT_CHANNEL_ID = int(os.getenv('honeypot_channel_id')) if os.getenv('honeypot_channel_id') else None
+HONEYPOT_LOG_THREAD_ID = int(os.getenv('honeypot_log_thread_id')) if os.getenv('honeypot_log_thread_id') else None
+HONEYPOT_SOFTBAN_SECONDS = 3600
 
 def log(message, level="INFO"):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -99,8 +103,77 @@ async def on_ready():
         await i.set_etag_and_id()
 
     await save_repositories_to_config()
+
+    await setup_honeypot_channel()
+
     log("Starting repository monitoring loop...", "HEADER")
     looprepos.start()
+
+async def setup_honeypot_channel():
+    if not HONEYPOT_CHANNEL_ID:
+        log("honeypot_channel_id not set, skipping honeypot setup")
+        return
+
+    try:
+        channel = bot.get_channel(HONEYPOT_CHANNEL_ID) or await bot.fetch_channel(HONEYPOT_CHANNEL_ID)
+    except Exception as e:
+        log(f"Error fetching honeypot channel: {e}", "ERROR")
+        return
+
+    try:
+        async for message in channel.history(limit=10):
+            if message.author == bot.user and message.embeds and message.embeds[0].title == "⚠️ Honeypot Channel":
+                log("Honeypot warning embed already present, skipping")
+                return
+
+        await channel.send(embed=MakeHoneypotWarningEmbed())
+        log("Sent honeypot warning embed", "SUCCESS")
+    except Exception as e:
+        log(f"Error setting up honeypot channel: {e}", "ERROR")
+
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+
+    if HONEYPOT_CHANNEL_ID and message.channel.id == HONEYPOT_CHANNEL_ID:
+        await handle_honeypot_trigger(message)
+        return
+
+    await bot.process_commands(message)
+
+async def handle_honeypot_trigger(message):
+    member = message.author
+    guild = message.guild
+    content = message.content
+
+    log(f"Honeypot triggered by {member} ({member.id}): {content}", "HEADER")
+
+    try:
+        await message.delete()
+    except Exception as e:
+        log(f"Error deleting honeypot trigger message: {e}", "ERROR")
+
+    try:
+        await guild.ban(member, reason="Honeypot channel triggered - softban", delete_message_seconds=HONEYPOT_SOFTBAN_SECONDS)
+        await guild.unban(member, reason="Honeypot softban - auto unban")
+        log(f"Softbanned {member} ({member.id}) for honeypot trigger", "SUCCESS")
+    except discord.Forbidden:
+        log(f"Missing permissions to softban {member} ({member.id})", "ERROR")
+        return
+    except Exception as e:
+        log(f"Error softbanning {member} ({member.id}): {e}", "ERROR")
+        return
+
+    if not HONEYPOT_LOG_THREAD_ID:
+        log("honeypot_log_thread_id not set, skipping softban notification")
+        return
+
+    try:
+        log_channel = bot.get_channel(HONEYPOT_LOG_THREAD_ID) or await bot.fetch_channel(HONEYPOT_LOG_THREAD_ID)
+        await log_channel.send(embed=MakeHoneypotBanEmbed(member, content))
+    except Exception as e:
+        log(f"Error sending honeypot softban notification: {e}", "ERROR")
 
 async def save_repositories_to_config():
     config = load_config()
