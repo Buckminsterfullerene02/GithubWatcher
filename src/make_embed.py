@@ -159,6 +159,30 @@ def MakeTaggedReleaseEmbed(release_data, new_assets, repo_name, tag_name):
     
     return embed
 
+def MakeHoneypotWarningEmbed():
+    embed = discord.Embed()
+    embed.title = "Honeypot Channel"
+    embed.description = "**Do not send messages in this channel!!**\nAnyone who sends a message here will be banned."
+    embed.color = discord.Colour.from_str("#ff0000")
+    return embed
+
+def MakeHoneypotBanEmbed(member, message_content):
+    embed = discord.Embed()
+    embed.title = "Honeypot Softban"
+    embed.color = discord.Colour.from_str("#ff0000")
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.add_field(name="User", value=f"{member} ({member.mention})", inline=False)
+    embed.add_field(name="User ID", value=str(member.id), inline=False)
+
+    if message_content:
+        content = message_content if len(message_content) <= 1024 else message_content[:1021] + "..."
+    else:
+        content = "*[no text content]*"
+    embed.add_field(name="Message", value=content, inline=False)
+
+    embed.timestamp = datetime.now()
+    return embed
+
 def sanitize_release_body(body):
     if not body:
         return ""
